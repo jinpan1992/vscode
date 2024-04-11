@@ -4,5 +4,1215 @@ github test
 new date
 16:47
 new
--------------------------------------------------------
--------------------------------------------------------
+-----------------------------------------------------------------------
+----------------------2024-04-11-update--------------------------------
+#include "mqtt_run_data_pub.h"
+#include <libxml/parser.h>
+#include <libxml/xpath.h>
+#include "persist.h"
+
+extern int rethj ;
+int Mqtt_Init_Flag = 0;
+int Mqtt_point_num =0;
+MQTT_T *mqtt_info1 = NULL;
+extern int32_t cjson_len;
+int32_t correspond_index =0;//mqtt上传测点数量
+
+/********************************************
+* Function name ：runDataChangePub
+* Description   : 运行数据变化上传
+* Parameter     ：
+* Return        ：
+*********************************************/
+int32_t runDataChangePub() {
+    int32_t errCode = OK;
+    char *runDataJson = NULL;
+    char *pubMessageJson = NULL;
+    BOOL isEncrypt = getIsEncrypt();
+
+    if (g_mqtt_handle.exist_value == TRUE) {
+        // 将运行数据转化为json格式
+        runDataJson = RunDataEncodeJson(&g_mqtt_handle, 0);
+
+        // AES对称加密
+        if (TRUE == isEncrypt) {     // 如果要求加密
+            if (FALSE == mqttRegSucFlag) {  // 如果秘钥交互不成功,则不发送数据
+                free(runDataJson);
+                runDataJson = NULL;
+                free(g_mqtt_handle.p);
+                g_mqtt_handle.exist_value = FALSE;
+                return NOT_YET_REG_REPLY;
+            }
+
+            int outLen = 0;
+            unsigned char *aesEncData = aesEncrypt((unsigned char *) runDataJson, (int) strlen(runDataJson),
+                                                   (unsigned char *) SESSION_KEY, &outLen);
+            // 转化为json格式
+            pubMessageJson = PubMessageEncodeJson((char *) aesEncData);
+
+            // 通过mqtt发送出去
+            errCode = mqttPub(&g_MQTT_CLIENT, pubMessageJson, Topic_Pub_RunData_change);
+            printf("Send change upload data packets with encrypted: %s\n", pubMessageJson);
+
+            // 释放返回json字符串的内存
+            if (runDataJson != NULL)
+            {
+                free(runDataJson);
+                runDataJson = NULL;
+            }
+
+            if (pubMessageJson != NULL)
+            {
+                free(pubMessageJson);
+                pubMessageJson = NULL;
+            }
+
+            free(g_mqtt_handle.p);
+            g_mqtt_handle.exist_value = FALSE;
+
+            if (ERR_PUB == errCode) {
+                return ERR;
+            }
+        }
+            // 如果要求不加密
+        else {
+            // 通过mqtt发送出去
+            errCode = mqttPub(&g_MQTT_CLIENT, runDataJson, Topic_Pub_RunData_change);
+            printf("Send change upload data packets with clear txt: %s\n", runDataJson);
+
+            // 释放返回json字符串的内存
+            free(runDataJson);
+            runDataJson = NULL;
+
+            free(g_mqtt_handle.p);
+            g_mqtt_handle.exist_value = FALSE;
+
+            if (ERR_PUB == errCode) {
+                return ERR;
+            }
+        }
+        g_mqtt_handle.exist_value = FALSE;
+    }
+    usleep(5000);
+    return SUCCESS_PUB;
+}
+
+/********************************************
+* Function name ：runDataChangePub
+* Description   : 运行数据变化上传(使用锁的方式)
+* Parameter     ：
+* Return        ：
+*********************************************/
+int32_t runDataChangePubMutex() {
+    int32_t errCode = OK;
+    char *runDataJson = NULL;
+    char *pubMessageJson = NULL;
+    BOOL isEncrypt = getIsEncrypt();
+
+    sem_wait(&(g_mqtt_handle.rwlock1));         // 信号量
+    pthread_mutex_lock(&g_mqtt_handle.mLock);  // 上锁
+
+    // 将运行数据转化为json格式
+    runDataJson = RunDataEncodeJson(&g_mqtt_handle, 0);
+
+    // AES对称加密
+    if (isEncrypt) {     // 如果要求加密
+        if (FALSE == mqttRegSucFlag) {  // 如果秘钥交互不成功,则不发送数据
+            // printf("秘钥交互不成功\n");
+            free(runDataJson);
+            runDataJson = NULL;
+
+            free(g_mqtt_handle.p);
+            pthread_mutex_unlock(&g_mqtt_handle.mLock);
+            sem_post(&(g_mqtt_handle.rwlock2));
+            return NOT_YET_REG_REPLY;
+        }
+
+        int outLen = 0;
+        unsigned char *aesEncData = aesEncrypt((unsigned char *) runDataJson, (int) strlen(runDataJson),
+                                               (unsigned char *) SESSION_KEY, &outLen);
+        // 转化为json格式
+        pubMessageJson = PubMessageEncodeJson((char *) aesEncData);
+
+        // 通过mqtt发送出去
+        errCode = mqttPub(&g_MQTT_CLIENT, pubMessageJson, Topic_Pub_RunData_change);
+        printf("发送密文运行数据(变化上送)报文: %s\n", pubMessageJson);
+
+        // 释放返回json字符串的内存
+        free(runDataJson);
+        runDataJson = NULL;
+
+        free(pubMessageJson);
+        pubMessageJson = NULL;
+
+        free(g_mqtt_handle.p);
+        pthread_mutex_unlock(&g_mqtt_handle.mLock);
+        sem_post(&(g_mqtt_handle.rwlock2));
+
+        if (ERR_PUB == errCode) {
+            return ERR;
+        }
+    }
+        // 如果要求不加密
+    else {
+        // 通过mqtt发送出去
+        errCode = mqttPub(&g_MQTT_CLIENT, runDataJson, Topic_Pub_RunData_change);
+        printf("发送明文运行数据(变化上送)报文: %s\n", runDataJson);
+
+        // 释放返回json字符串的内存
+        free(runDataJson);
+        runDataJson = NULL;
+
+        free(g_mqtt_handle.p);
+        pthread_mutex_unlock(&g_mqtt_handle.mLock);
+        sem_post(&(g_mqtt_handle.rwlock2));
+
+        if (ERR_PUB == errCode) {
+            return ERR;
+        }
+    }
+    return SUCCESS_PUB;
+}
+uint32_t GetMqttPonitFromXml(char *configfilePATH, int * idcount)
+{
+    xmlDocPtr doc;
+    xmlNodePtr curNode, Node1, Node2, Node3;
+    xmlNodeSetPtr nodeset;
+    xmlXPathObjectPtr result;
+    xmlXPathContextPtr context;
+    char *szDocName;
+    int32_t point_num = 0;
+    int32_t total_point_num = 0;
+    int32_t i = 0;
+    int32_t tableid = 0;
+    int32_t tablecmd = 0;
+    int32_t index_id = 0;
+    szDocName = configfilePATH;
+    PROTOCOL_DATA_T *protocol_data = NULL;
+    uint16_t dev_code;
+    uint8_t ptl_type;                   //协议类型
+    uint8_t byte_seq;                   //字节序号
+    uint8_t word_seq;                   //字序号
+
+    doc = xmlReadFile(szDocName,"UTF-8", XML_PARSE_RECOVER);
+
+    if (NULL == doc)
+    {
+        printf("%s Document not parsed successfully.\n", szDocName);
+        xmlFreeDoc(doc);
+        return -1;
+    }
+
+    curNode = xmlDocGetRootElement(doc);
+    if (NULL == curNode)
+    {
+        printf("no root!\n");
+        xmlFreeDoc(doc);
+        return -1;
+    }
+
+    context = xmlXPathNewContext(doc);
+    if (context == NULL)
+    {
+        printf("context is NULL\n");
+        return -1;
+    }
+
+    if (xmlStrcmp(curNode->name, BAD_CAST "root"))
+    {
+        printf("document of the wrong type, root node != root.\n");
+        xmlFreeDoc(doc);
+        return -1;
+    }
+
+    curNode = curNode->xmlChildrenNode;
+    xmlNodePtr propNodePtr = curNode;
+    Node1 = curNode;
+
+    while (Node1 != NULL)
+    {
+        if ((!xmlStrcmp(Node1->name, (const xmlChar *)"protocol")))
+        {
+            xmlAttrPtr attrPtr = Node1->properties;
+            while (attrPtr != NULL)
+            {
+                propNodePtr = Node1;
+                if (!xmlStrcmp(attrPtr->name, BAD_CAST "DevCode"))
+                {
+                    xmlChar* szAttr = xmlGetProp(propNodePtr, BAD_CAST "DevCode");
+                    dev_code = strtoul((const char *)szAttr, NULL, 10);
+                    xmlFree(szAttr);
+                    //printf("%s dev_code:%d (L%d)\n", __func__, dev_code, __LINE__);
+                }
+                else if (!xmlStrcmp(attrPtr->name, BAD_CAST "ProtocolType"))
+                {
+                    xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "ProtocolType");
+                    if (strcmp((const char *)szAttr, "ModbusTcp") == 0)
+                    {
+                        ptl_type = MODBUS;
+                    }
+                    else if (strcmp((const char *)szAttr, "DLT645") == 0)
+                    {
+                        ptl_type = DLT645;
+                    }
+                    else
+                    {
+                        ptl_type = MODBUS;
+                    }
+                    //printf("%s ptl_type:%d (L%d)\n", __func__, ptl_type, __LINE__);
+                    xmlFree(szAttr);
+                }
+
+                attrPtr = attrPtr->next;
+            }
+
+            Node2 = Node1->xmlChildrenNode;
+            uint32_t protocol_num = 0;
+            while (Node2 != NULL)
+            {
+                if ((!xmlStrcmp(Node2->name, (const xmlChar *)"table")))
+                {
+                    propNodePtr = Node2;
+                    attrPtr = propNodePtr->properties;
+                    while (attrPtr != NULL)
+                    {
+                        if (!xmlStrcmp(attrPtr->name, BAD_CAST "id"))
+                        {
+                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "id");
+                            tableid = strtoul((const char *)szAttr, NULL, 10);
+                            (*idcount)++;
+
+                            //printf("protocol_num:%d tableid = %d (L%d)\n", protocol_num, tableid, __LINE__);
+                            xmlFree(szAttr);
+                        }
+                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "cmd"))
+                        {
+                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "cmd");
+                            tablecmd = strtoul((const char *)szAttr, NULL, 10);
+
+                            //printf("protocol_num:%d cmd = %d\n", protocol_num, pProtocol[protocol_num].cmd );
+                            xmlFree(szAttr);
+                        }
+
+                        attrPtr = attrPtr->next;
+                    }
+                    Node3 = Node2->xmlChildrenNode;
+                    while (Node3 != NULL)
+                    {
+                        if ((!xmlStrcmp(Node3->name, (const xmlChar *)"register")))
+                        {
+                            uint32_t j = 0;
+                            char xpath_point[100] = {0};
+                            char xpath_tab[100] = {0};
+                            xmlNodePtr tmp_node= NULL;
+                            sprintf (xpath_tab, "/root/protocol/table[@id='%d' and @cmd='%d'  ]", tableid, tablecmd);
+                            sprintf (xpath_point , "%s/register/point", xpath_tab);
+                            xmlChar *xpath_tmp = (xmlChar *) xpath_point;
+                            result = xmlXPathEvalExpression (xpath_tmp, context);
+
+                            if (result)
+                            {
+                                nodeset = result->nodesetval;
+
+                                if (nodeset->nodeNr)
+                                {
+                                    point_num = nodeset->nodeNr;
+                                    total_point_num += point_num;
+//                                     printf("total_point_num: %d %d\n", point_num, total_point_num);
+                                    protocol_data = (PROTOCOL_DATA_T *) malloc (point_num * sizeof(PROTOCOL_DATA_T));
+                                    if (protocol_data == NULL)
+                                    {
+                                        printf("malloc protocol_data error.\n");
+                                        exit(EXIT_FAILURE);
+                                    }
+                                    else
+                                    {
+                                        memset(protocol_data, 0, point_num*(sizeof(PROTOCOL_DATA_T)));
+                                    }
+                                    for (i = 0; i < point_num; i++)
+                                    {
+                                        protocol_data[i].low_limit = 0x80000000;
+                                        protocol_data[i].high_limit = 0x7fffffff;
+                                    }
+                                }
+                            }
+                            for (j = 0; j < point_num; j++)
+                            {
+                                index_id = j;
+                                tmp_node = nodeset->nodeTab[j];
+                                propNodePtr = tmp_node;
+                                if ((!xmlStrcmp(tmp_node->name, (const xmlChar *)"point")))
+                                {
+                                    xmlAttrPtr attrPtr = propNodePtr->properties;
+                                    while (attrPtr != NULL)
+                                    {
+                                        if (!xmlStrcmp(attrPtr->name, BAD_CAST "DataName"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "DataName");
+                                            xmlFree(szAttr);
+                                        }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "Devcode"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "Devcode");
+                                            xmlFree(szAttr);
+                                        }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "Cmd"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "Cmd");
+                                            xmlFree(szAttr);
+                                        }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "DataId"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "DataId");
+                                            xmlFree(szAttr);
+                                        }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "SlaveId"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "SlaveId");
+                                            xmlFree(szAttr);
+                                        }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "NDataAddress"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "NDataAddress");
+                                            xmlFree(szAttr);
+                                        }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "MqttDeviceId"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "MqttDeviceId");
+                                            xmlFree(szAttr);
+                                        }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "GatewayId"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "GatewayId");
+                                            xmlFree(szAttr);
+                                        }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "DataCode"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "DataCode");
+                                            xmlFree(szAttr);
+                                        }
+                                        attrPtr = attrPtr->next;
+                                    }
+                                }
+
+                            }
+                        }
+                        Node3 = Node3->next;
+                    }
+                    protocol_num ++;
+                }
+                Node2 = Node2->next;
+            }
+        }
+        Node1 = Node1->next;
+    }
+    xmlFreeDoc(doc);
+
+    return total_point_num;
+}
+int32_t ParseMqttFromXml(char *configfilePATH,MQTT_T *mqtt_info)
+{
+    xmlDocPtr doc;
+    xmlNodePtr curNode, Node1, Node2, Node3;
+    xmlNodeSetPtr nodeset;
+    xmlXPathObjectPtr result;
+    xmlXPathContextPtr context;
+    char *szDocName;
+    int32_t point_num = 0;
+    int32_t total_point_num = 0;
+    int32_t i = 0;
+    int32_t tableid = 0;
+    uint8_t tablecmd = 0;
+    szDocName = configfilePATH;
+    PROTOCOL_DATA_T *protocol_data = NULL;
+    uint16_t dev_code;
+    uint8_t ptl_type;                   //协议类型
+    uint8_t byte_seq;                   //字节序号
+    uint8_t word_seq;                   //字序号
+    uint32_t gatewayid = 0;
+    uint32_t mqttDeviceId = 0;
+    uint32_t mqtt_info_index = 0;
+    uint32_t devcode = 0 ;
+    char date_type1[128] = {};
+
+    uint32_t  date_type2  = 0;
+    doc = xmlReadFile(szDocName,"UTF-8", XML_PARSE_RECOVER);
+    if (NULL == doc)
+    {
+        printf("%s Document not parsed successfully.\n", szDocName);
+        xmlFreeDoc(doc);
+        return -1;
+    }
+
+    curNode = xmlDocGetRootElement(doc);
+    if (NULL == curNode)
+    {
+        printf("no root!\n");
+        xmlFreeDoc(doc);
+        return -1;
+    }
+
+    context = xmlXPathNewContext(doc);
+    if (context == NULL)
+    {
+        printf("context is NULL\n");
+        return -1;
+    }
+
+    if (xmlStrcmp(curNode->name, BAD_CAST "root"))
+    {
+        printf("document of the wrong type, root node != root.\n");
+        xmlFreeDoc(doc);
+        return -1;
+    }
+
+    curNode = curNode->xmlChildrenNode;
+    xmlNodePtr propNodePtr = curNode;
+    Node1 = curNode;
+    while (Node1 != NULL)
+    {
+        if ((!xmlStrcmp(Node1->name, (const xmlChar *)"protocol")))//判断是否相等，相等返回0
+        {
+            xmlAttrPtr attrPtr = Node1->properties;
+            while (attrPtr != NULL)
+            {
+                propNodePtr = Node1;
+                if (!xmlStrcmp(attrPtr->name, BAD_CAST "DevCode"))
+                {
+                    xmlChar* szAttr = xmlGetProp(propNodePtr, BAD_CAST "DevCode");
+                    dev_code = strtoul((const char *)szAttr, NULL, 10);
+                    xmlFree(szAttr);
+                    //printf("%s dev_code:%d (L%d)\n", __func__, dev_code, __LINE__);
+                }
+                attrPtr = attrPtr->next;
+            }
+
+            Node2 = Node1->xmlChildrenNode;
+            uint32_t protocol_num = 0;
+            while (Node2 != NULL)
+            {
+                if ((!xmlStrcmp(Node2->name, (const xmlChar *)"table")))
+                {
+                    propNodePtr = Node2;
+                    attrPtr = propNodePtr->properties;
+                    while (attrPtr != NULL)
+                    {
+                        if (!xmlStrcmp(attrPtr->name, BAD_CAST "id"))
+                        {
+                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "id");
+                            tableid = strtoul((const char *)szAttr, NULL, 10);
+
+                            //printf("protocol_num:%d tableid = %d (L%d)\n", protocol_num, tableid, __LINE__);
+                            xmlFree(szAttr);
+                        }
+                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "cmd"))
+                        {
+                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "cmd");
+                            tablecmd = strtoul((const char *)szAttr, NULL, 10);
+
+                            //printf("protocol_num:%d cmd = %d\n", protocol_num, pProtocol[protocol_num].cmd );
+                            xmlFree(szAttr);
+                        }
+                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "Devcode"))
+                        {
+                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "Devcode");
+                            devcode = strtoul((char *)szAttr, NULL, 0);
+                            //printf("protocol_num:%d address = %d\n", protocol_num, pProtocol[protocol_num].address);
+                            xmlFree(szAttr);
+                        }
+                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "GatewayId"))
+                        {
+                            xmlChar* szAttr_gatewayId = xmlGetProp(propNodePtr,BAD_CAST "GatewayId");
+                            gatewayid =strtoul((char *)szAttr_gatewayId, NULL, 0);
+                            //EMS_LOG(LL_DEBUG, MODULE_C, false, "read_set = %d\n", protocol_data_p[protocol_num].cyc_enable);
+                            xmlFree(szAttr_gatewayId);
+                        }
+                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "MqttDeviceId"))
+                        {
+                            xmlChar* szAttr_MqttDeviceId = xmlGetProp(propNodePtr,BAD_CAST "MqttDeviceId");
+                            mqttDeviceId =strtoul((char *)szAttr_MqttDeviceId, NULL, 0);
+                            //EMS_LOG(LL_DEBUG, MODULE_C, false, "read_set = %d\n", protocol_data_p[protocol_num].cyc_enable);
+                            xmlFree(szAttr_MqttDeviceId);
+                        }
+                        attrPtr = attrPtr->next;
+                    }
+                    Node3 = Node2->xmlChildrenNode;
+                    while (Node3 != NULL)
+                    {
+                        if ((!xmlStrcmp(Node3->name, (const xmlChar *)"register")))
+                        {
+                            //test
+                            propNodePtr = Node3;
+                            attrPtr = propNodePtr->properties;
+                            while (attrPtr != NULL)
+                            {
+                                if (!xmlStrcmp(attrPtr->name, BAD_CAST "type"))
+                                {
+                                    xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "type");
+                                    strcpy(date_type1, (char *)szAttr);
+                                    if(strcmp(date_type1,"R") == 0)
+                                    {
+                                        date_type2 =1;
+                                    }
+                                    else if(strcmp(date_type1,"W") == 0)
+                                    {
+                                        date_type2 =2;
+                                    }
+                                    else if(strcmp(date_type1,"RW") == 0)
+                                    {
+                                        date_type2 =3;
+                                    }
+                                    xmlFree(szAttr);
+                                }
+                                attrPtr = attrPtr->next;
+                            }
+                            //test
+
+
+
+                            uint32_t j = 0;
+                            char xpath_point[100] = {0};
+                            char xpath_tab[100] = {0};
+                            xmlNodePtr tmp_node= NULL;
+                            sprintf (xpath_tab, "/root/protocol/table[@id='%d' and @cmd='%d'  ]", tableid, tablecmd);
+                            sprintf (xpath_point , "%s/register/point", xpath_tab);
+                            xmlChar *xpath_tmp = (xmlChar *) xpath_point;
+                            result = xmlXPathEvalExpression (xpath_tmp, context);
+                            if (result)
+                            {
+                                nodeset = result->nodesetval;
+                                if (nodeset->nodeNr)
+                                {
+                                    point_num = nodeset->nodeNr;
+                                    total_point_num += point_num;
+                                    protocol_data = (PROTOCOL_DATA_T *) malloc (point_num * sizeof(PROTOCOL_DATA_T));
+                                    if (protocol_data == NULL)
+                                    {
+                                        printf("malloc protocol_data error.\n");
+                                        exit(EXIT_FAILURE);
+                                    }
+                                    else
+                                    {
+                                        memset(protocol_data, 0, point_num*(sizeof(PROTOCOL_DATA_T)));
+                                    }
+                                    for (i = 0; i < point_num; i++)
+                                    {
+                                        protocol_data[i].low_limit = 0x80000000;
+                                        protocol_data[i].high_limit = 0x7fffffff;
+                                    }
+                                }
+                            }
+                            for (j = 0; j < point_num; j++)
+                            {
+//                                 index_id = j;
+                                tmp_node = nodeset->nodeTab[j];
+                                propNodePtr = tmp_node;
+                                mqtt_info[mqtt_info_index].gatewayid = gatewayid;
+                                mqtt_info[mqtt_info_index].cmd = tablecmd;
+                                mqtt_info[mqtt_info_index].devcode = devcode;
+                                mqtt_info[mqtt_info_index].mqttdeviceid = mqttDeviceId;
+                                mqtt_info[mqtt_info_index].date_type = date_type2;
+                                if ((!xmlStrcmp(tmp_node->name, (const xmlChar *)"point")))
+                                {
+                                    xmlAttrPtr attrPtr = propNodePtr->properties;
+                                    while (attrPtr != NULL)
+                                    {
+                                        if (!xmlStrcmp(attrPtr->name, BAD_CAST "DataName"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "DataName");
+                                            strcpy(mqtt_info[mqtt_info_index].devname, (char *)szAttr);
+                                            xmlFree(szAttr);
+                                        }
+//                                         else if (!xmlStrcmp(attrPtr->name, BAD_CAST "Devcode"))
+//                                         {
+//                                             xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "Devcode");
+//                                             mqtt_info[mqtt_info_index].devcode = strtoul((char *)szAttr, NULL, 0);
+//                                             xmlFree(szAttr);
+//                                         }
+//                                         else if (!xmlStrcmp(attrPtr->name, BAD_CAST "Cmd"))
+//                                         {
+//                                             xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "Cmd");
+//                                             mqtt_info[mqtt_info_index].cmd = strtoul((char *)szAttr, NULL, 0);
+//                                             xmlFree(szAttr);
+//                                         }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "DataId"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "DataId");
+                                            mqtt_info[mqtt_info_index].data_id = strtoul((char *)szAttr, NULL, 0);
+                                            xmlFree(szAttr);
+                                        }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "SlaveId"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "SlaveId");
+                                            mqtt_info[mqtt_info_index].slave_id = strtoul((char *)szAttr, NULL, 0);
+                                            xmlFree(szAttr);
+                                        }
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "NDataAddress"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "NDataAddress");
+                                            mqtt_info[mqtt_info_index].address =strtoul((char *)szAttr, NULL, 0);
+                                            xmlFree(szAttr);
+                                        }
+//                                         else if (!xmlStrcmp(attrPtr->name, BAD_CAST "MqttDeviceId"))
+//                                         {
+//                                             xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "MqttDeviceId");
+//                                             mqtt_info[mqtt_info_index].mqttdeviceid = strtoul((char *)szAttr, NULL, 0);
+//                                             xmlFree(szAttr);
+//                                         }
+
+                                        else if (!xmlStrcmp(attrPtr->name, BAD_CAST "DataCode"))
+                                        {
+                                            xmlChar* szAttr = xmlGetProp(propNodePtr,BAD_CAST "DataCode");
+                                            mqtt_info[mqtt_info_index].datacode = strtoul((char *)szAttr, NULL, 0);
+                                            xmlFree(szAttr);
+                                        }
+                                        attrPtr = attrPtr->next;
+                                    }
+                                }
+                                mqtt_info_index++;
+
+                            }
+                        }
+                        Node3 = Node3->next;
+                    }
+                    protocol_num ++;
+                }
+                Node2 = Node2->next;
+            }
+        }
+        Node1 = Node1->next;
+    }
+    xmlFreeDoc(doc);
+
+    return total_point_num;
+}
+/********************************************
+* Function name ：runDataProduct
+* Description   : 从队列中获取数据给全局变量
+* Parameter     ：
+* Return        ：
+*********************************************/
+void runDataProduct(DEV_DATA_T *devData, uint32_t num) {
+
+    /* 等待g_mqtt_handle.isRunning被赋值为TRUE */
+    while (!g_mqtt_handle.isRunning) {
+        usleep(1000);
+    }
+
+    if (g_mqtt_handle.exist_value == FALSE) {
+        //printf("生产者产生数据开关:%d\n",g_mqtt_handle.exist_value);
+        // 初始化指针变量
+        g_mqtt_handle.total_num = num;
+        g_mqtt_handle.p = (ONCE_DATA_T *) malloc(num * sizeof(ONCE_DATA_T));
+        memset(g_mqtt_handle.p, 0, num * sizeof(ONCE_DATA_T));
+
+        // 获取所有变化的数值
+        uint32_t i;
+        for (i = 0; i < num; i++) {
+
+            // 赋值
+            g_mqtt_handle.p[i].deviceCode = devData[i].dev_code;
+            g_mqtt_handle.p[i].index = devData[i].index;
+            g_mqtt_handle.p[i].dataId = devData[i].data_id;
+            g_mqtt_handle.p[i].ucDataType = devData[i].value.ucDataType;
+            if(devData[i].value.ucDataType == 0)//f32
+            {
+                g_mqtt_handle.p[i].data.f32 = devData[i].value.data.f32;
+//                 printf("g_mqtt_handle.p[i].data.f32: %f\n", g_mqtt_handle.p[i].data.f32);
+            }
+            if(devData[i].value.ucDataType == 1)
+            {
+                g_mqtt_handle.p[i].data.u32 = devData[i].value.data.u32;
+            }
+            if(devData[i].value.ucDataType == 2)
+            {
+                g_mqtt_handle.p[i].data.s32 = devData[i].value.data.s32;
+            }
+
+        }
+        g_mqtt_handle.exist_value = TRUE;
+    }
+}
+
+/********************************************
+* Function name ：runDataProduct
+* Description   : 从队列中获取数据给全局变量(使用锁的方式)
+* Parameter     ：
+* Return        ：
+*********************************************/
+void runDataProductMutex(DEV_DATA_T *devData, uint32_t num) {
+
+    /* 等待g_mqtt_handle.isRunning被赋值为TRUE */
+    while (!g_mqtt_handle.isRunning) {
+        usleep(1000);
+    }
+
+    sem_wait(&(g_mqtt_handle.rwlock2));// 信号量
+    pthread_mutex_lock(&g_mqtt_handle.mLock);// 上锁
+
+    // 初始化指针变量
+    g_mqtt_handle.total_num = num;
+    g_mqtt_handle.p = (ONCE_DATA_T *) malloc(num * sizeof(ONCE_DATA_T));
+    memset(g_mqtt_handle.p, 0, num * sizeof(ONCE_DATA_T));
+
+    // 获取所有变化的数值
+    uint32_t i;
+    for (i = 0; i < num; i++) {
+
+        // 赋值
+        g_mqtt_handle.p[i].deviceCode = devData[i].dev_code;
+        g_mqtt_handle.p[i].index = devData[i].index;
+        g_mqtt_handle.p[i].dataId = devData[i].data_id;
+        if(devData[i].value.ucDataType == 0)//f32
+        {
+            g_mqtt_handle.p[i].data.f32 = devData[i].value.data.f32;
+        }
+        if(devData[i].value.ucDataType == 1)
+        {
+            g_mqtt_handle.p[i].data.u32 = devData[i].value.data.u32;
+        }
+        if(devData[i].value.ucDataType == 2)
+        {
+            g_mqtt_handle.p[i].data.s32 = devData[i].value.data.s32;
+        }
+        //g_mqtt_handle.p[i].value = devData[i].value.data.f32;
+        //printf("devData[i].value.ucDataType: %d\n", devData[i].value.ucDataType);
+
+    }
+    pthread_mutex_unlock(&g_mqtt_handle.mLock);
+    sem_post(&(g_mqtt_handle.rwlock1)); // 信号量1
+}
+
+/********************************************
+* Function name ：getAllRunData
+* Description   : 获取全量数据
+* Parameter     ：
+* Return        ：
+*********************************************/
+
+/********************************************
+* Function name ：getAllRunData
+* Description   : 获取全量数据
+* Parameter     ：
+* Return        ：
+*********************************************/
+#if 0
+int isInArray(int item, uint32_t * arr,int length)
+{
+    int i = 0;
+    for(i=0;i<length;i++)
+    {
+        if(item == arr[i])
+            return 1;
+    }
+    return 0;
+}
+
+int Mqtt_Initxml()
+{
+    if(Mqtt_Init_Flag == 0)
+    {
+
+        /* 创建存储空间 */
+        Mqtt_point_num = GetMqttPonitFromXml(MQTT_XML);
+
+        mqtt_info1 = calloc(Mqtt_point_num, sizeof(MQTT_T));
+        Mqtt_point_num = ParseMqttFromXml(MQTT_XML,mqtt_info1);
+
+        g_mqtt_handle.p_all = (ONCE_DATA_T *) malloc(Mqtt_point_num * sizeof(ONCE_DATA_T));
+        memset(g_mqtt_handle.p_all, 0, Mqtt_point_num * sizeof(ONCE_DATA_T));
+
+        uint32_t *mqttdevice = (uint32_t *) malloc(Mqtt_point_num * sizeof(uint32_t));
+        int k = 0;
+        int u=0;
+        for(u=0;u<Mqtt_point_num;u++)
+        {
+            int item = mqtt_info1[u].mqttdeviceid;
+            if(!isInArray(item,mqttdevice,Mqtt_point_num))
+            {
+                mqttdevice[k] = item;
+                k++;
+            }
+        }
+        g_mqtt_handle.MqttDeviceIdKind = (uint32_t *)malloc(sizeof(uint32_t)*k);
+        g_mqtt_handle.MqttDeviceIdNums = k;
+        memcpy(g_mqtt_handle.MqttDeviceIdKind, mqttdevice, sizeof(uint32_t)*k);
+        free(mqttdevice);
+
+        for(u=0;u<k;u++)
+        {
+            printf("g_mqtt_handle.MqttDeviceIdKind[%d]=%d \n", u, g_mqtt_handle.MqttDeviceIdKind[u]);
+        }
+
+        for (u = 0; u < Mqtt_point_num; u++)
+        {
+            printf("Mqtt_point_num:%d, deviceid:%d, datacode:%d, dev[%d %d %d]\n",
+                   u, mqtt_info1[u].mqttdeviceid, mqtt_info1[u].datacode, mqtt_info1[u].devcode, mqtt_info1[u].devindex, mqtt_info1[u].data_id);
+        }
+        Mqtt_Init_Flag =1;
+    }
+
+    return 0;
+}
+
+void getAllRunData()
+{
+    int index = 0;
+    int i=0;
+
+    Mqtt_Initxml();
+
+    for(i=0;i<Mqtt_point_num;i++)
+    {
+        if(2 == mqtt_info1[i].date_type)
+        {
+            continue;
+        }
+        uint16_t devCode = mqtt_info1[i].devcode;
+        uint16_t dataId = mqtt_info1[i].data_id;
+        VALUE_INFO_T stDataValue;
+        GdataFetch(&stDataValue, devCode, 1, dataId, -1);
+        g_mqtt_handle.p_all[index].ucDataType = stDataValue.ucDataType;
+        if(strlen(mqtt_info1[i].sendfunc) !=0 )
+        {
+            F_CALLBACK callback = GetFunc(mqtt_info1[i].sendfunc);
+            if(callback == NULL)
+            {
+                continue;
+            }
+            int ret = callback(mqtt_info1[i].rule, 0, &stDataValue, i);
+            /* 返回值为1时说明此条数据无需上传*/
+            if(1 == ret)
+            {
+                printf("%s datacode:%d mqttdeviceid:%d, dev:[%d,%d,%d]:value[%d:%d] not send.(L%d)\n",
+                       __func__, mqtt_info1[i].datacode, mqtt_info1[i].mqttdeviceid,
+                       devCode, mqtt_info1[i].devindex, dataId,
+                       stDataValue.ucDataType, stDataValue.data.u32, __LINE__);
+                continue;
+            }
+        }
+        if(stDataValue.ucDataType == FLOAT_T)
+        {
+            g_mqtt_handle.p_all[index].data.f32 = stDataValue.data.f32 ;
+        }
+        if(stDataValue.ucDataType == U_INT_T)
+        {
+            g_mqtt_handle.p_all[index].data.u32 = stDataValue.data.u32;
+        }
+        if(stDataValue.ucDataType == S_INT_T)
+        {
+            g_mqtt_handle.p_all[index].data.s32 = stDataValue.data.s32;
+        }
+
+        g_mqtt_handle.p_all[index].ucDataType = stDataValue.ucDataType;
+        g_mqtt_handle.p_all[index].deviceCode = mqtt_info1[i].devcode;
+        g_mqtt_handle.p_all[index].index = mqtt_info1[i].devindex;
+        g_mqtt_handle.p_all[index].dataId = mqtt_info1[i].data_id;
+        g_mqtt_handle.p_all[index].mqttdeviceid = mqtt_info1[i].mqttdeviceid;
+        g_mqtt_handle.p_all[index].gatewayid = mqtt_info1[i].gatewayid;
+        g_mqtt_handle.p_all[index].datacode = mqtt_info1[i].datacode;
+        index++;
+    }
+    correspond_index = index;
+    g_mqtt_handle.total_num_all = index;
+    printf("correspond_index=%d;",correspond_index);
+    return;
+}
+
+#endif
+
+#if 1
+int isInArray(int item, uint32_t * arr,int length)
+{
+    int i = 0;
+    for(i=0;i<length;i++)
+    {
+        if(item == arr[i])
+            return 1;
+    }
+    return 0;
+}
+
+void getAllRunData() {
+    /*1.这里北向数据的意思是：使用的是经过转换地址后的数据。因此使用SDB_ND的方法；
+     2.使用两层for循环，获取数据，然后调用ReadPointData方法获取每个测点的数据;
+     3.和我IEC104地址转换功能没关系。
+    */
+
+    int32_t devNum, devCode, devIndex, i, j, k,u, k1=0,m;
+    int b[5000] = {0};
+    int num = 0, index = 0;
+    uint16_t dataId;
+    int flagSearch = 0;
+    DEV_INFO_EXT_T *devList = NULL;
+
+    devNum = SDB_ND_GetNum();     // 北向设备数量
+    devList = SDB_ND_GetList();   // 北向设备列表
+
+    /* 统计有多少个测点 */
+    for (i = 0; i < devNum; ++i)
+    {
+        if(devList[i].stDevUID.devCode == 2304)
+            continue;
+        for (j = 0; j < devList[i].dwPtlNum; ++j)
+        {
+            if(devList[i].pProtocol[j].cmd == 5)
+                continue;
+            num += devList[i].pProtocol[j].ptl_data_num;   // pProtocol:点表属性, ptl_data_num:测点个数
+        }
+    }
+    g_mqtt_handle.total_num_all = num;
+
+    if(Mqtt_Init_Flag == 0)
+    {
+            /* 创建存储空间 */
+        int idcount;//mqttdeviceid个数
+        Mqtt_point_num = GetMqttPonitFromXml(MQTT_XML, &idcount);//测点个数
+
+        if(Mqtt_point_num == -1)
+        {
+            printf("没有导入转发mqtt.xml,请重新确定文件是否存在\n");
+        }
+        printf("Mqtt_point_num: %d idcount: %d\n", Mqtt_point_num, idcount);
+
+        mqtt_info1 = calloc(Mqtt_point_num, sizeof(MQTT_T));
+        Mqtt_point_num = ParseMqttFromXml(MQTT_XML,mqtt_info1);
+
+        g_mqtt_handle.p_all = (ONCE_DATA_T *) malloc(Mqtt_point_num * sizeof(ONCE_DATA_T));
+        memset(g_mqtt_handle.p_all, 0, Mqtt_point_num * sizeof(ONCE_DATA_T));
+
+        uint32_t *mqttdevice = (uint32_t *) malloc(Mqtt_point_num * sizeof(uint32_t));
+        int k = 0;
+        int u = 0;
+        for(u=0;u<Mqtt_point_num;u++)
+        {
+            int item = mqtt_info1[u].mqttdeviceid;
+            if(!isInArray(item,mqttdevice,Mqtt_point_num))
+            {
+                mqttdevice[k] = item;//将不同的mqttdeviceid写入数组中，筛选重复的
+                k++;//mqttdeviceid类型总个数
+            }
+        }
+        g_mqtt_handle.MqttDeviceIdKind = (uint32_t *)malloc(sizeof(uint32_t)*(k));
+        g_mqtt_handle.MqttDeviceIdNums = k;
+        memcpy(g_mqtt_handle.MqttDeviceIdKind, mqttdevice, sizeof(uint32_t)*k);
+        free(mqttdevice);
+
+        for(u=0;u<k;u++)
+        {
+            printf("g_mqtt_handle.MqttDeviceIdKind[%d]=%d \n", u, g_mqtt_handle.MqttDeviceIdKind[u]);
+        }
+
+        for (u = 0; u < Mqtt_point_num; u++)
+        {
+            printf("Mqtt_point_num:%d, deviceid:%d, datacode:%d, dev[%d %d %d]\n",
+                   u, mqtt_info1[u].mqttdeviceid, mqtt_info1[u].datacode, mqtt_info1[u].devcode, mqtt_info1[u].devindex, mqtt_info1[u].data_id);
+        }
+
+        Mqtt_Init_Flag =1;
+
+    }
+    //测点遍历，找到跳出循环，并进行下一测点遍历寻找，mqtt_info1[u].address
+    printf("1006 devNum: %d\n", devNum);
+    for(u=0;u<Mqtt_point_num;u++)
+    {
+        printf("1010 u: %d\n", u);
+        if(mqtt_info1[u].date_type == 1||mqtt_info1[u].date_type == 3)
+        {
+            /* 全局数据赋值 */
+            for(i = devNum-1; i > 0; i--)
+            //for (i = 0; i < devNum; ++i)
+            {    // 遍历设备
+                if(flagSearch == 1)
+                {
+                    flagSearch = 0;//跳过后初始化
+                    printf("三级跳出\n");
+                    break;//三级跳出
+                }
+                devCode = devList[i].stDevUID.devCode;
+                if(devCode == 2304)
+                    continue;
+                devIndex = devList[i].stDevUID.devIndex;
+
+                for (j = 0; j < devList[i].dwPtlNum; ++j) {   // 遍历表
+                    printf("测点数：%d  %d设备  %d表  %d总表数\n", u, i, j, devList[i].dwPtlNum);
+//                     if(flagSearch == 1)
+//                     {
+//                         flagSearch = 0;
+//                         printf("二级跳出\n");
+//                         break;//二级跳出
+//                     }
+                    for (k = 0; k < devList[i].pProtocol[j].ptl_data_num; ++k) {   // 遍历测点
+                            dataId = devList[i].pProtocol[j].protocol_data[k].data_id;
+                            printf("dataId: %d %d\n", k, dataId);
+
+                            VALUE_INFO_T stDataValue;
+                            int tempret = GdataFetch(&stDataValue, devCode, devIndex, dataId, -1);
+                            printf("tempret: %d\n", tempret);
+
+                            g_mqtt_handle.p_all[index].ucDataType = stDataValue.ucDataType;
+
+                            if(stDataValue.ucDataType == FLOAT_T)
+                            {
+                                g_mqtt_handle.p_all[index].data.f32 = stDataValue.data.f32 ;
+                            }
+                            if(stDataValue.ucDataType == U_INT_T)
+                            {
+                                g_mqtt_handle.p_all[index].data.u32 = stDataValue.data.u32;
+                            }
+                            if(stDataValue.ucDataType == S_INT_T)
+                            {
+                                g_mqtt_handle.p_all[index].data.s32 = stDataValue.data.s32;
+                            }
+                            g_mqtt_handle.p_all[index].deviceCode = devCode;
+                            g_mqtt_handle.p_all[index].index = devIndex;
+                            g_mqtt_handle.p_all[index].dataId = dataId;
+                            printf("%d %d %d\n", devCode, devIndex, dataId);
+                            printf("**** %d %d %d\n", u, devList[i].pProtocol[j].protocol_data[k].address, mqtt_info1[u].address);
+
+                            if((devList[i].pProtocol[j].protocol_data[k].address == mqtt_info1[u].address)&&(devList[i].pProtocol[j].cmd == mqtt_info1[u].cmd))
+                            {
+                                g_mqtt_handle.p_all[index].mqttdeviceid = mqtt_info1[u].mqttdeviceid;
+                                g_mqtt_handle.p_all[index].gatewayid = mqtt_info1[u].gatewayid;
+                                g_mqtt_handle.p_all[index].datacode = mqtt_info1[u].datacode;
+                                index++;
+                                printf("%d %d %d %d\n", u, mqtt_info1[u].mqttdeviceid, mqtt_info1[u].gatewayid, mqtt_info1[u].datacode);
+                                if(i != 1)
+                                {
+                                    flagSearch = 1;//找到一个满足条件的point,当处于最后一个设备时，三级跳出循环不会进行，而是u增加一个数才执行三级跳出，逻辑有问题，需要避免
+                                }
+
+                                printf("一级跳出\n");
+                                break;//一级跳出
+                            }
+                    }
+                }
+            }
+        }
+    }
+
+
+    correspond_index  = index;
+}
+
+#endif
+
+/********************************************
+* Function name ：runDataTimerPub
+* Description   : 获取全量数据进行上传
+* Parameter     ：
+* Return        ：
+*********************************************/
+int32_t runDataTimerPub() {
+    int32_t errCode = OK;
+    char *runDataJson = NULL;
+    char *pubMessageJson = NULL;
+    BOOL isEncrypt = getIsEncrypt();
+    PERSIST_NODE_INFO_T runLog;
+    time_t now;
+    struct tm *timenow;
+    char timedata[30] = {0};
+    // 获取南向全量数据
+    getAllRunData();
+    // 将运行数据转化为json格式
+
+    runDataJson = RunDataEncodeJson(&g_mqtt_handle, 1);
+
+
+//     printf("全量数据JSON格式化:%s\n",runDataJson);
+
+    if (isEncrypt) {                   // 加密使能开关.
+        if (FALSE == mqttRegSucFlag) {  // 如果秘钥交互未完成.
+
+            // 释放返回json字符串的内存
+            free(runDataJson);
+            runDataJson = NULL;
+
+//             free(g_mqtt_handle.p_all);
+            return NOT_YET_REG_REPLY;
+        }
+
+        // AES对称加密
+        int outLen = 0;
+        unsigned char *aesEncData = aesEncrypt((unsigned char *) runDataJson, (int) strlen(runDataJson),
+                                               (unsigned char *) SESSION_KEY, &outLen);
+        // 转化为json格式
+        pubMessageJson = PubMessageEncodeJson((char *) aesEncData);
+        printf("Send periodic data packets with encrypted\n");
+
+        // 通过mqtt发送出去
+        errCode = mqttPub(&g_MQTT_CLIENT, pubMessageJson, getPubTopic());
+
+
+        // 释放返回json字符串的内存
+        free(runDataJson);
+        runDataJson = NULL;
+
+        free(pubMessageJson);
+        pubMessageJson = NULL;
+
+//         free(g_mqtt_handle.p_all);
+
+        if (ERR_PUB == errCode)
+            return ERR;
+    }
+    else   // 如果不加密
+    {
+        // 通过mqtt发送出去
+        errCode = mqttPub(&g_MQTT_CLIENT, runDataJson, getPubTopic());
+//         printf("mqtt pub-errcode:%d\n", errCode);
+        if(errCode == 0)
+        {
+            printf("Send periodic data packets with clear txt %s\n", runDataJson);
+
+            runLog.pcDescription = "MQTT upload successful";
+            time(&now);
+            timenow = localtime(&now);
+            sprintf(timedata,"%d-%02d-%02d %02d:%02d:%02d",timenow->tm_year+1900,timenow->tm_mon+1,timenow->tm_mday,timenow->tm_hour,timenow->tm_min, timenow->tm_sec);
+            strcpy(runLog.date,timedata);
+            strcpy( runLog.arrcDevName, "zero carbon gateway");
+            Persister_StoreNode(HIS_RECORD_RUN_STATE, &runLog);
+
+        }
+
+        // 释放返回json字符串的内存
+        if (runDataJson != NULL)
+        {
+            free(runDataJson);
+            runDataJson = NULL;
+        }
+//         free(g_mqtt_handle.p_all);
+
+        if (ERR_PUB == errCode)
+            return ERR;
+    }
+    return SUCCESS_PUB;
+}
+
+/********************************************
+* Function name ：RunDataPubThread
+* Description   : 创建运行数据发送的线程
+* Parameter     ：
+* Return        ：
+*********************************************/
+int32_t runDataPub() {
+    int32_t errCode = OK;
+    BOOL isChangeUpload = getUploadMethod();
+    uint32_t allUploadPeriod = getAllUploadPeriod();
+    if (TRUE == isChangeUpload) {
+        // 发送变化上传数据
+        errCode = runDataChangePub();
+    } else {
+        // 定时发送全量数据
+        errCode = runDataTimerPub();
+//         printf("time pub date--errcode:%d\n", errCode);
+        //上传周期
+        sleep(20);
+    }
+
+    if (errCode != OK) {
+        return ERR;
+    }
+
+    return OK;
+}
