@@ -1,0 +1,20 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+../include/swap.h
+
+/root/Desktop/testFile/testMakefile/1028/main.c
+stdio.h
+-
+swap.h
+/root/Desktop/testFile/testMakefile/1028/swap.h
+
+/root/Desktop/testFile/testMakefile/1028/src/swap.c
+swap.h
+/root/Desktop/testFile/testMakefile/1028/src/swap.h
+
