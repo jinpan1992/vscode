@@ -1,0 +1,1 @@
+/usr/bin/gcc   -rdynamic CMakeFiles/main.dir/src/main.c.o  -o ../bin/main  -Wl,-rpath,/root/Desktop/testFile/testMakefile/1032/testFunc/lib ../testFunc/lib/libtestFunc.so 

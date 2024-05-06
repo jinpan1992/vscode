@@ -1,0 +1,4 @@
+/root/Desktop/testFile/testMakefile/1031/build/CMakeFiles/rebuild_cache.dir
+/root/Desktop/testFile/testMakefile/1031/build/CMakeFiles/edit_cache.dir
+/root/Desktop/testFile/testMakefile/1031/build/CMakeFiles/testFunc_static.dir
+/root/Desktop/testFile/testMakefile/1031/build/CMakeFiles/testFunc_shared.dir
