@@ -1,0 +1,2 @@
+功能：查询数据库
+使用newQuery.c，可直接使用./new websyscfg.db netcfg，根据不同的数据库和表进行替换即可
