@@ -1,0 +1,56 @@
+# 创建一个随机的加密密钥（可选：你可以使用自己的密钥）
+openssl rand -hex 32 > key.hex 
+
+# 使用AES-256-CBC模式加密文件  
+# 注意：`-salt`选项用于添加随机的盐值以增加安全性  
+# `-k`选项用于从文件中读取密钥（这里我们使用key.hex文件）  
+# `-in`选项指定输入文件  
+# `-out`选项指定输出文件  
+# `-e`选项表示加密  
+# `-aes-256-cbc`指定加密算法和模式  
+openssl enc -aes-256-cbc -salt -in 1.tar.gz -out 2.tar.gz -kfile key.hex 
+
+openssl enc -aes-256-cbc -d -in 2.tar.gz -out decrypted.tar.gz -kfile key.hex
+
+
+
+
+#使用OpenSSL生成2048位的RSA密钥对
+openssl genpkey -algorithm RSA -out private_key.pem -pkeyopt rsa_keygen_bits:2048  
+openssl rsa -pubout -in private_key.pem -out public_key.pem
+# 注意：这个命令可能无法直接加密整个文件，因为它只接受小块数据作为输入  
+# 所以这里假设plaintext.txt是一个很小的文本文件  
+openssl rsautl -encrypt -pubin -inkey public_key.pem -in plaintext.txt -out ciphertext.bin
+
+openssl rsautl -decrypt -inkey private_key.pem -in ciphertext.bin -out decryptedtext.txt
+
+
+
+
+ATTENTION:一般使用非对称加密密钥，对于大数据量，应采用对称加密AES
+
+
+#指定256位的对称密钥
+export AES_KEY="12345678901234567890123456789012"
+
+openssl enc -aes-256-ecb -in plaintext.txt -out encrypted.bin -K $AES_KEY
+
+openssl enc -d -aes-256-ecb -in encrypted.bin -out decrypted.txt -K $AES_KEY
+
+
+#使用AES-256-CBC，指定密钥和初始化向量
+创建密钥文件 (key.txt)：
+echo -n '12345678901234567890123456789012' > key.txt
+
+创建IV文件 (iv.txt)：
+echo -n '1234567890123456' > iv.txt
+
+openssl enc -aes-256-cbc -in file_to_encrypt.txt -out encrypted_file.aes -K $(cat key.txt | xxd -p -c 32) -iv $(cat iv.txt | xxd -p -c 16)
+
+openssl enc -d -aes-256-cbc -in encrypted_file.aes -out decrypted_file.txt -K $(cat key.txt | xxd -p -c 32) -iv $(cat iv.txt | xxd -p -c 16)
+
+【xxd -p -c 命令被用来读取文本文件并将其转换为所需的十六进制格式】
+
+
+
+
