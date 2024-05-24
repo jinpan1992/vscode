@@ -1,2 +1,6 @@
 功能：查询数据库
 使用newQuery.c，可直接使用./new websyscfg.db netcfg，根据不同的数据库和表进行替换即可
+
+2024-05-24更新
+先使用queryTableName查询数据库下存在哪些表，再使用newQuery查询对应表下的数据
+
