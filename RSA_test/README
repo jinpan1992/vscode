@@ -1,0 +1,5 @@
+gcc -o rsa_test rsa_test.c -lssl -lcrypto
+
+rsa_test.c------加密
+
+dersa_test.c----解密
