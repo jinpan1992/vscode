@@ -53,4 +53,16 @@ openssl enc -d -aes-256-cbc -in encrypted_file.aes -out decrypted_file.txt -K $(
 
 
 
+AES-256-CBC:不太安全
+openssl enc -aes-256-cbc -in 1.txt -out 1.enc -pass pass:yourpassword
+openssl enc -aes-256-cbc -d -in 1.enc -out 1.txt -pass pass:yourpassword
+
+【升级】
+-pbkdf2：PBKDF2（Password-Based Key Derivation Function 2）是一种基于密码的密钥派生函数，它通过多次重复哈希过程来增加密钥生成的时间复杂度，从而提高安全性。PBKDF2 是比旧方法更安全的选择。
+openssl enc -aes-256-cbc -pbkdf2 -in 1.txt -out 1.enc -pass pass:yourpassword
+openssl enc -aes-256-cbc -pbkdf2 -d -in 1.enc -out 1.txt -pass pass:yourpassword
+
+
+
+
 
