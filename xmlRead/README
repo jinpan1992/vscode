@@ -1,0 +1,15 @@
+gcc編譯：
+gcc -o test readXml -lxml2   
+
+會出現如下報錯提示：
+fatal error: libxml/parser.h: No such file or directory
+    2 | #include <libxml/parser.h>
+
+
+解決方法：
+需要指定頭文件位置：
+whereis libxml2
+:/usr/include/libxml2
+
+最終編譯結果為：
+gcc -o test1 readXml.c -I /usr/include/libxml2 -lxml2

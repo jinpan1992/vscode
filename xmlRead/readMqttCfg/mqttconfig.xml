@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <mqtt enabled="1" host_ip="iot-060a0bni.mqtt.iothub.aliyuncs.com" host_port="1883"></mqtt>
+    <client_id>hhqn1GkdqxW.YKOvEgMKxNUYCdiOhy64|securemode=2,signmethod=hmacsha256,timestamp=1693971453256|</client_id>
+    <username>YKOvEgMKxNUYCdiOhy64&amp;hhqn1GkdqxW</username>
+    <password>e2a0f5598d56574a775a962c774ad27ffe9b71ab015cf19df8edec05152524bf</password>
+    <upload_method>0</upload_method>
+    <encrypt enabled="0" en_method="1"></encrypt>
+    <upload_period>30s</upload_period>
+    <topic_pub_rundata_all>/hhqn1GkdqxW/YKOvEgMKxNUYCdiOhy64/user/update</topic_pub_rundata_all>
+    <topic_sub_command>/hhqn1GkdqxW/YKOvEgMKxNUYCdiOhy64/user/get</topic_sub_command>
+</root>
+

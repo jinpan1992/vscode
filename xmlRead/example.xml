@@ -1,0 +1,8 @@
+<root>
+  <name>Debug.group</name>
+  <website>https://debug.group</website>
+  <function>
+    <json>https://debug.group/json.html</json>
+    <sql>https://debug.group/sql.html</sql>
+  </function>
+</root>
